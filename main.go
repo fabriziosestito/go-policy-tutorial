@@ -16,7 +16,7 @@ var (
 
 func main() {
 	wapc.RegisterFunctions(wapc.Functions{
-		// "validate":          validate,
+		"validate":          validate,
 		"validate_settings": validateSettings,
 	})
 }
