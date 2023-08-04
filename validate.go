@@ -64,6 +64,17 @@ func validate(payload []byte) ([]byte, error) {
 		}
 	}
 
+	for requiredLabel := range settings.ConstrainedLabels {
+		_, found := pod.Metadata.Labels[requiredLabel]
+		if !found {
+			return kubewarden.RejectRequest(
+				kubewarden.Message(fmt.Sprintf(
+					"Constrained label %s not found inside of Pod", requiredLabel),
+				),
+				kubewarden.NoCode)
+		}
+	}
+
 	return kubewarden.AcceptRequest()
 }
 
