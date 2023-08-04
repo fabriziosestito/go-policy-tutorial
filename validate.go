@@ -4,15 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 
-	onelog "github.com/francoispqt/onelog"
-	corev1 "github.com/kubewarden/k8s-objects/api/core/v1"
+	mapset "github.com/deckarep/golang-set/v2"
 	kubewarden "github.com/kubewarden/policy-sdk-go"
 	kubewarden_protocol "github.com/kubewarden/policy-sdk-go/protocol"
+	"github.com/tidwall/gjson"
 )
 
 func validate(payload []byte) ([]byte, error) {
-	// highlight-next-line
-	// NOTE 1
 	// Create a ValidationRequest instance from the incoming payload
 	validationRequest := kubewarden_protocol.ValidationRequest{}
 	err := json.Unmarshal(payload, &validationRequest)
@@ -22,8 +20,6 @@ func validate(payload []byte) ([]byte, error) {
 			kubewarden.Code(400))
 	}
 
-	// highlight-next-line
-	// NOTE 2
 	// Create a Settings instance from the ValidationRequest object
 	settings, err := NewSettingsFromValidationReq(&validationRequest)
 	if err != nil {
@@ -32,45 +28,48 @@ func validate(payload []byte) ([]byte, error) {
 			kubewarden.Code(400))
 	}
 
-	// highlight-next-line
-	// NOTE 3
 	// Access the **raw** JSON that describes the object
 	podJSON := validationRequest.Request.Object
 
 	// highlight-next-line
-	// NOTE 4
-	// Try to create a Pod instance using the RAW JSON we got from the
-	// ValidationRequest.
-	pod := &corev1.Pod{}
-	if err := json.Unmarshal([]byte(podJSON), pod); err != nil {
-		return kubewarden.RejectRequest(
-			kubewarden.Message(
-				fmt.Sprintf("Cannot decode Pod object: %s", err.Error())),
-			kubewarden.Code(400))
-	}
+	// NOTE 1
+	data := gjson.GetBytes(
+		podJSON,
+		"metadata.labels")
 
-	logger.DebugWithFields("validating pod object", func(e onelog.Entry) {
-		e.String("name", pod.Metadata.Name)
-		e.String("namespace", pod.Metadata.Namespace)
+	var validationErr error
+	labels := mapset.NewThreadUnsafeSet[string]()
+	data.ForEach(func(key, value gjson.Result) bool {
+		// highlight-next-line
+		// NOTE 2
+		label := key.String()
+		labels.Add(label)
+
+		// highlight-next-line
+		// NOTE 3
+		validationErr = validateLabel(label, value.String(), &settings)
+		if validationErr != nil {
+			return false
+		}
+
+		// keep iterating
+		return true
 	})
 
 	// highlight-next-line
-	// NOTE 5
-	for label, value := range pod.Metadata.Labels {
-		if err := validateLabel(label, value, &settings); err != nil {
-			return kubewarden.RejectRequest(
-				kubewarden.Message(err.Error()),
-				kubewarden.NoCode)
-		}
+	// NOTE 4
+	if validationErr != nil {
+		return kubewarden.RejectRequest(
+			kubewarden.Message(validationErr.Error()),
+			kubewarden.NoCode)
 	}
 
+	// highlight-next-line
+	// NOTE 5
 	for requiredLabel := range settings.ConstrainedLabels {
-		_, found := pod.Metadata.Labels[requiredLabel]
-		if !found {
+		if !labels.Contains(requiredLabel) {
 			return kubewarden.RejectRequest(
-				kubewarden.Message(fmt.Sprintf(
-					"Constrained label %s not found inside of Pod", requiredLabel),
-				),
+				kubewarden.Message(fmt.Sprintf("Constrained label %s not found inside of Pod", requiredLabel)),
 				kubewarden.NoCode)
 		}
 	}
